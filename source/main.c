@@ -304,13 +304,55 @@ int main() {
 	time_t curtime;	
 
 	int change_entry = 0;
+	int change_entry_rand = 0;
+	int change_album = 0;
 
     while(1) {
-		if(change_entry) {
+		if(change_entry || change_entry_rand || change_album) {
 			// determine new album/track
 			int prevRandAlbumNum = randAlbumNum;
-			randAlbumNum = rand() % num_albums;
-			randTrackFromAlbum = rand() % albums[randAlbumNum]->num_entries;
+			if(change_entry_rand) {
+				// Random
+				randAlbumNum = rand() % num_albums;
+				randTrackFromAlbum = rand() % albums[randAlbumNum]->num_entries;
+			}
+			else {
+				if(change_album) {
+					// Sequential movement amongst albums, always going to the first entry in the destination album
+					if(randAlbumNum + change_album < 0) {
+						randAlbumNum = num_albums-1;
+					}
+					else if (randAlbumNum + change_album > num_albums-1) {
+						randAlbumNum = 0;
+					}
+					else {
+						randAlbumNum += change_album;
+					}
+					// Enter the album at the start
+					randTrackFromAlbum = 0;
+				}
+				else if(change_entry) {
+					// Sequential movement amongst entries, potentially moving into other albums
+					if(randTrackFromAlbum + change_entry < 0 || randTrackFromAlbum + change_entry > albums[randAlbumNum]->num_entries-1) {
+						// Go to the next/prev album cause we've reached the end of this one
+						if(randAlbumNum + change_entry < 0) {
+							randAlbumNum = num_albums-1;
+						}
+						else if (randAlbumNum + change_entry > num_albums-1) {
+							randAlbumNum = 0;
+						}
+						else {
+							randAlbumNum += change_entry;
+						}
+						// Enter the album at the start or end depending which direction we're going.
+						if(change_entry < 0) randTrackFromAlbum = albums[randAlbumNum]->num_entries-1;
+						else randTrackFromAlbum = 0;
+					}
+					else {
+						randTrackFromAlbum += change_entry;
+					}
+				}
+			}				
 			
 			// Only fetch the cover if the album changed
 			if(prevRandAlbumNum != randAlbumNum) {
@@ -331,6 +373,8 @@ int main() {
 				MP3Player_PlayFile(mp3File, &mp3Reader, NULL);
 			}
 			change_entry = 0;
+			change_entry_rand = 0;
+			change_album = 0;
 		}
         WPAD_ScanPads();
         const u32 wpaddown = WPAD_ButtonsDown(0);
@@ -340,40 +384,47 @@ int main() {
 		if(cover != NULL) {
 			GRRLIB_DrawImg(coverStartX, coverStartY, cover, 0, MIN(coverScaledW, coverScaledH), MIN(coverScaledW, coverScaledH), GRRLIB_WHITE);  // Draw the cover
 		}
-		GRRLIB_Printf(5, 25, tex_BMfont3, GRRLIB_WHITE, 1, "WAKEMII");
+		GRRLIB_Printf(50, 25, tex_BMfont3, GRRLIB_WHITE, 1, "WAKEMII");
 		
 		// Print stuff
 		time(&curtime);
 		strftime(timeLine, sizeof(timeLine), "%Y-%m-%d %H:%M:%S", localtime(&curtime));
-		GRRLIB_Printf(350, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Date Time: %s", timeLine);
         GRRLIB_Printf(350, 27, tex_BMfont5, GRRLIB_WHITE, 1, "Current FPS: %d | Mem Free %.2fMB", FPS, (SYS_GetArena1Hi()-SYS_GetArena1Lo())/(1048576.0f));
+		GRRLIB_Printf(350, 47, tex_BMfont5, GRRLIB_WHITE, 1, "Date Time: %s", timeLine);
 
-		GRRLIB_Printf(100, scrHeight-80, tex_BMfont5, GRRLIB_WHITE, 1, "Track: %s", entryName);
+		GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
+		GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Track: %s", entryName);
 		// If volume was updated, set the volume
 		if(vol_updated) {
-			GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
+			GRRLIB_Printf(500, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
 			vol_updated--;
 		}
 
         if(wpaddown & WPAD_BUTTON_HOME) {
             break;
         }
-        if(wpadheld & WPAD_BUTTON_LEFT) {
+        if(wpaddown & WPAD_BUTTON_LEFT) {
+			change_entry = -1;
         }
-        if(wpaddown & WPAD_BUTTON_RIGHT) {
+        else if(wpaddown & WPAD_BUTTON_RIGHT) {
 			change_entry = 1;
         }
-        if(wpadheld & WPAD_BUTTON_UP) {
+        else if(wpadheld & WPAD_BUTTON_UP) {
 			if(vol<256) {vol++; MP3Player_Volume(vol);}
 			vol_updated = 300;	// ~5 sec volume display
         }
-        if(wpadheld & WPAD_BUTTON_DOWN) {
+        else if(wpadheld & WPAD_BUTTON_DOWN) {
 			if(vol>0) {vol--; MP3Player_Volume(vol);}
 			vol_updated = 300;	// ~5 sec volume display
         }
-        if(wpaddown & WPAD_BUTTON_MINUS) {
+        else if(wpaddown & WPAD_BUTTON_MINUS) {
+			change_album = -1;
         }
-        if(wpaddown & WPAD_BUTTON_PLUS) {
+        else if(wpaddown & WPAD_BUTTON_PLUS) {
+			change_album = 1;
+        }
+		else if(wpaddown & WPAD_BUTTON_1) {
+			change_entry_rand = 1;
         }
         //if(wpadheld & WPAD_BUTTON_1 && wpadheld & WPAD_BUTTON_2) {
         //    WPAD_Rumble(WPAD_CHAN_0, 1); // Rumble on
