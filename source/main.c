@@ -59,10 +59,45 @@ struct album {
 
 static struct album* albums[MAX_ALBUMS];
 static int num_albums;
+static int num_hourly;
 
+// General stuff
 static int print_usb;
 static int scrWidth;
 static int scrHeight;
+
+// Menu stuff
+enum menu_state_enum {
+	NOT_IN_MENU,
+	MENU_SETTINGS,
+	MENU_MSGBOX
+};
+
+static enum menu_state_enum menu_state = NOT_IN_MENU;
+enum setting_pos_enum {
+	SETTING_CONTINUOUS_PLAY_ON_OFF,
+	SETTING_ALARM_ON_OFF,
+	SETTING_ALARM_TIME_HRS,
+	SETTING_ALARM_TIME_MINS,
+	SETTING_HOURLY_ON_OFF,
+	SETTINGS_CANCEL,
+	SETTINGS_SAVE,
+	SETTING_MAX
+};
+static enum setting_pos_enum settings_pos = SETTING_CONTINUOUS_PLAY_ON_OFF;
+
+static int msgBoxTimer = 0;
+static char* msgBoxTitle = NULL;
+static char* msgBoxMsg = NULL;
+
+// Alarm stuff
+static int continuousPlayOn = 1;
+static int alarmOn = 0;
+static int alarmHrs = 7;
+static int alarmMins = 0;
+static int hourlyAlarmOn = 0;
+static int alarmGoingOff = 0;
+static int hourlyGoingOff = 0;
 
 char* getCoverExtensionFromType(enum cover_type_t coverType) {
 	switch(coverType) {
@@ -151,7 +186,13 @@ struct album* parseDirForAlbum(char *path, char *dirName) {
 FILE* getEntryFromIndex(int albumNum, int entryNum, char* entryName) {
 	char dirPath[1024];
 	memset(dirPath, 0, 1024);
-	sprintf(dirPath, "/wakemii/%s", albums[albumNum]->name);
+	if(albumNum != -1) {
+		sprintf(dirPath, "/wakemii/albums/%s", albums[albumNum]->name);
+	}
+	else {
+		// Hourly
+		strcpy(dirPath, "/wakemii/hourly");
+	}
 	print_gecko("Attempting to parse dir for random entry %s %i\r\n", dirPath, entryNum);
 	struct dirent *entry;
 	struct stat fstat;
@@ -188,7 +229,7 @@ GRRLIB_texImg* getCoverFromIdx(int randAlbumNum, float* coverScaledW, float* cov
 		print_gecko("Attempting to load the album cover\r\n");
 		char absPath[1024];
 		memset(absPath, 0, 1024);
-		sprintf(absPath, "/wakemii/%s/cover.%s", albums[randAlbumNum]->name, coverExt);
+		sprintf(absPath, "/wakemii/albums/%s/cover.%s", albums[randAlbumNum]->name, coverExt);
 		cover = GRRLIB_LoadTextureFromFile(absPath);
 		print_gecko("cover %s ptr %08X\r\n", absPath, cover);
 		if(cover != NULL) {
@@ -201,6 +242,11 @@ GRRLIB_texImg* getCoverFromIdx(int randAlbumNum, float* coverScaledW, float* cov
 		}
 	}
 	return cover;
+}
+
+static int shutdown = 0;
+void ShutdownWii() {
+	shutdown = 1;
 }
 
 int main() {
@@ -221,7 +267,10 @@ int main() {
 	scrHeight = videoMode->viHeight;
 
     WPAD_Init();
-    WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC_IR);
+	WPAD_SetIdleTimeout(120);
+	WPAD_SetPowerButtonCallback((WPADShutdownCallback) ShutdownWii);
+	SYS_SetPowerCallback(ShutdownWii);
+    WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS);
 
     GRRLIB_bytemapFont *bmf_Font1 = GRRLIB_LoadBMF(ocean_bmf);
     GRRLIB_bytemapFont *bmf_Font2 = GRRLIB_LoadBMF(frontal_bmf);
@@ -241,10 +290,10 @@ int main() {
     GRRLIB_texImg *tex_BMfont5 = GRRLIB_LoadTexture(BMfont5_png);
     GRRLIB_InitTileSet(tex_BMfont5, 8, 16, 0);
 	
-	// Parse the wakemii dir for valid directories.
-	DIR* dp = opendir( "/wakemii" );
+	// Parse the wakemii album dir for valid directories.
+	DIR* dp = opendir( "/wakemii/albums" );
 	if(!dp) {
-		print_gecko("wakemii dir not found!\r\n");
+		print_gecko("wakemii/albums dir not found!\r\n");
 		return -1;
 	}
 	struct dirent *entry;
@@ -255,7 +304,7 @@ int main() {
 		}
 		char absPath[1024];
 		memset(absPath, 0, 1024);
-		sprintf(absPath, "/wakemii/%s", entry->d_name);
+		sprintf(absPath, "/wakemii/albums/%s", entry->d_name);
 		stat(absPath,&fstat);
 		if(fstat.st_mode & _IFDIR) {
 			struct album* ret = parseDirForAlbum(absPath, entry->d_name);
@@ -273,6 +322,30 @@ int main() {
 		print_gecko("Album: %s. %i tracks. Cover Type: %i\r\n", albums[i]->name, albums[i]->num_entries, albums[i]->cover_type);
 	}
 	
+	// Parse the wakemii hourly dir for mp3 files.
+	dp = opendir( "/wakemii/hourly" );
+	if(!dp) {
+		print_gecko("wakemii/hourly dir not found!\r\n");
+		return -1;
+	}
+
+	while( (entry = readdir(dp)) != NULL ){
+		if(!strcasecmp(entry->d_name, "..") || !strcasecmp(entry->d_name, ".")) {
+			continue;
+		}
+		char absPath[1024];
+		memset(absPath, 0, 1024);
+		sprintf(absPath, "/wakemii/hourly/%s", entry->d_name);
+		stat(absPath,&fstat);
+		if(!(fstat.st_mode & _IFDIR)) {
+			if(endsWith(entry->d_name, ".mp3")) {
+				num_hourly++;
+			}
+		}
+	}
+	closedir(dp);
+	print_gecko("Found %i hourly chimes\r\n", num_hourly);
+	
 	// Pick a random album + display its artwork
 	srand(gettick());
 	int randAlbumNum = rand() % num_albums;
@@ -283,20 +356,19 @@ int main() {
 	int coverStartX = 0;
 	int coverStartY = 0;
 	GRRLIB_texImg* cover = getCoverFromIdx(randAlbumNum, &coverScaledW, &coverScaledH, &coverStartX, &coverStartY);
-		
-	//print_gecko("Attempting to load a file from disk\r\n");
-	//GRRLIB_texImg* coverTest = GRRLIB_LoadTextureFromFile("/wakemii/F-Zero/cover.jpg");
-	//print_gecko("CoverTest ptr %08X\r\n", coverTest);
 	
 	char entryName[1024];
 	memset(entryName, 0, 1024);
 	char* entryNamePtr = &entryName[0];
 	
 	MP3Player_Init();
-	FILE *mp3File = getEntryFromIndex(randAlbumNum, randTrackFromAlbum, entryNamePtr);
-	print_gecko("mp3File ptr %08X\r\n", mp3File);
-	if(mp3File != NULL) {
-		MP3Player_PlayFile(mp3File, &mp3Reader, NULL);
+	FILE *mp3File = NULL;
+	if(continuousPlayOn) {
+		mp3File = getEntryFromIndex(randAlbumNum, randTrackFromAlbum, entryNamePtr);
+		print_gecko("mp3File ptr %08X\r\n", mp3File);
+		if(mp3File != NULL) {
+			MP3Player_PlayFile(mp3File, &mp3Reader, NULL);
+		}
 	}
 	
 	char timeLine[256];
@@ -306,126 +378,324 @@ int main() {
 	int change_entry = 0;
 	int change_entry_rand = 0;
 	int change_album = 0;
-
+	int alarmSongHandled = 0;
+	int change_entry_rand_hourly = 0;
+	int hourlyChimeHandled = 0;
+	
     while(1) {
-		if(change_entry || change_entry_rand || change_album) {
-			// determine new album/track
-			int prevRandAlbumNum = randAlbumNum;
-			if(change_entry_rand) {
-				// Random
-				randAlbumNum = rand() % num_albums;
-				randTrackFromAlbum = rand() % albums[randAlbumNum]->num_entries;
-			}
-			else {
-				if(change_album) {
-					// Sequential movement amongst albums, always going to the first entry in the destination album
-					if(randAlbumNum + change_album < 0) {
-						randAlbumNum = num_albums-1;
-					}
-					else if (randAlbumNum + change_album > num_albums-1) {
-						randAlbumNum = 0;
-					}
-					else {
-						randAlbumNum += change_album;
-					}
-					// Enter the album at the start
-					randTrackFromAlbum = 0;
-				}
-				else if(change_entry) {
-					// Sequential movement amongst entries, potentially moving into other albums
-					if(randTrackFromAlbum + change_entry < 0 || randTrackFromAlbum + change_entry > albums[randAlbumNum]->num_entries-1) {
-						// Go to the next/prev album cause we've reached the end of this one
-						if(randAlbumNum + change_entry < 0) {
-							randAlbumNum = num_albums-1;
-						}
-						else if (randAlbumNum + change_entry > num_albums-1) {
-							randAlbumNum = 0;
-						}
-						else {
-							randAlbumNum += change_entry;
-						}
-						// Enter the album at the start or end depending which direction we're going.
-						if(change_entry < 0) randTrackFromAlbum = albums[randAlbumNum]->num_entries-1;
-						else randTrackFromAlbum = 0;
-					}
-					else {
-						randTrackFromAlbum += change_entry;
-					}
-				}
-			}				
-			
-			// Only fetch the cover if the album changed
-			if(prevRandAlbumNum != randAlbumNum) {
-				if(cover) {
-					GRRLIB_FreeTexture(cover);
-				}
-				cover = getCoverFromIdx(randAlbumNum, &coverScaledW, &coverScaledH, &coverStartX, &coverStartY);
-			}
-			
+		if(shutdown) {
 			MP3Player_Stop();
-			if(mp3File) {
-				fclose(mp3File);
-			}
-			memset(entryName, 0, 1024);
-			mp3File = getEntryFromIndex(randAlbumNum, randTrackFromAlbum, entryNamePtr);
-			print_gecko("mp3File ptr %08X\r\n", mp3File);
-			if(mp3File != NULL) {
-				MP3Player_PlayFile(mp3File, &mp3Reader, NULL);
-			}
+			SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+		}
+		// If we're not on continuous play, nop out any nav actions for songs.
+		if(!continuousPlayOn && !alarmGoingOff) {
 			change_entry = 0;
 			change_entry_rand = 0;
 			change_album = 0;
 		}
+		// Trigger a song for the alarm.
+		if(alarmGoingOff && !alarmSongHandled) {
+			alarmSongHandled = 1;
+			change_entry_rand = 1;
+		}
+		// Trigger a song for the hourly alarm.
+		if(hourlyGoingOff && !hourlyChimeHandled) {
+			hourlyChimeHandled = 1;
+			change_entry_rand_hourly = 1;
+		}
+		
+		// Change in track was requested, handle it.
+		if(change_entry || change_entry_rand || change_album || change_entry_rand_hourly) {
+			if(change_entry_rand_hourly) {
+				MP3Player_Stop();
+				if(mp3File) {
+					fclose(mp3File);
+				}
+				memset(entryName, 0, 1024);
+				mp3File = getEntryFromIndex(-1, rand() % num_hourly, entryNamePtr);
+				print_gecko("mp3File ptr %08X\r\n", mp3File);
+				if(mp3File != NULL) {
+					MP3Player_PlayFile(mp3File, &mp3Reader, NULL);
+				}
+				
+				if(cover) {
+					GRRLIB_FreeTexture(cover);
+					cover = NULL;
+				}
+				
+				change_entry_rand_hourly = 0;
+			}
+			else {
+				// determine new album/track
+				int prevRandAlbumNum = randAlbumNum;
+				if(change_entry_rand) {
+					// Random
+					randAlbumNum = rand() % num_albums;
+					randTrackFromAlbum = rand() % albums[randAlbumNum]->num_entries;
+				}
+				else {
+					if(change_album) {
+						// Sequential movement amongst albums, always going to the first entry in the destination album
+						if(randAlbumNum + change_album < 0) {
+							randAlbumNum = num_albums-1;
+						}
+						else if (randAlbumNum + change_album > num_albums-1) {
+							randAlbumNum = 0;
+						}
+						else {
+							randAlbumNum += change_album;
+						}
+						// Enter the album at the start
+						randTrackFromAlbum = 0;
+					}
+					else if(change_entry) {
+						// Sequential movement amongst entries, potentially moving into other albums
+						if(randTrackFromAlbum + change_entry < 0 || randTrackFromAlbum + change_entry > albums[randAlbumNum]->num_entries-1) {
+							// Go to the next/prev album cause we've reached the end of this one
+							if(randAlbumNum + change_entry < 0) {
+								randAlbumNum = num_albums-1;
+							}
+							else if (randAlbumNum + change_entry > num_albums-1) {
+								randAlbumNum = 0;
+							}
+							else {
+								randAlbumNum += change_entry;
+							}
+							// Enter the album at the start or end depending which direction we're going.
+							if(change_entry < 0) randTrackFromAlbum = albums[randAlbumNum]->num_entries-1;
+							else randTrackFromAlbum = 0;
+						}
+						else {
+							randTrackFromAlbum += change_entry;
+						}
+					}
+				}				
+				
+				// Only fetch the cover if the album changed
+				if(prevRandAlbumNum != randAlbumNum) {
+					if(cover) {
+						GRRLIB_FreeTexture(cover);
+					}
+					cover = getCoverFromIdx(randAlbumNum, &coverScaledW, &coverScaledH, &coverStartX, &coverStartY);
+				}
+				
+				MP3Player_Stop();
+				if(mp3File) {
+					fclose(mp3File);
+				}
+				memset(entryName, 0, 1024);
+				mp3File = getEntryFromIndex(randAlbumNum, randTrackFromAlbum, entryNamePtr);
+				print_gecko("mp3File ptr %08X\r\n", mp3File);
+				if(mp3File != NULL) {
+					MP3Player_PlayFile(mp3File, &mp3Reader, NULL);
+				}
+				change_entry = 0;
+				change_entry_rand = 0;
+				change_album = 0;
+			}
+		}
+		
+		// Scan for input
         WPAD_ScanPads();
         const u32 wpaddown = WPAD_ButtonsDown(0);
         const u32 wpadheld = WPAD_ButtonsHeld(0);
 
         GRRLIB_FillScreen(GRRLIB_BLACK);    // Clear the screen
-		if(cover != NULL) {
-			GRRLIB_DrawImg(coverStartX, coverStartY, cover, 0, MIN(coverScaledW, coverScaledH), MIN(coverScaledW, coverScaledH), GRRLIB_WHITE);  // Draw the cover
+		if(mp3File && MP3Player_IsPlaying()) {
+			if(cover != NULL) {
+				// Draw the cover
+				GRRLIB_DrawImg(coverStartX, coverStartY, cover, 0, MIN(coverScaledW, coverScaledH), MIN(coverScaledW, coverScaledH), GRRLIB_WHITE);  
+			}
+			GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
+			GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Track: %s", entryName);
 		}
-		GRRLIB_Printf(50, 25, tex_BMfont3, GRRLIB_WHITE, 1, "WAKEMII");
 		
-		// Print stuff
+		// Print general stuff
 		time(&curtime);
+		struct tm *tmpTime = gmtime(&curtime);
+		GRRLIB_Printf(50, 25, tex_BMfont3, GRRLIB_WHITE, 1, "WAKEMII");
 		strftime(timeLine, sizeof(timeLine), "%Y-%m-%d %H:%M:%S", localtime(&curtime));
         GRRLIB_Printf(350, 27, tex_BMfont5, GRRLIB_WHITE, 1, "Current FPS: %d | Mem Free %.2fMB", FPS, (SYS_GetArena1Hi()-SYS_GetArena1Lo())/(1048576.0f));
 		GRRLIB_Printf(350, 47, tex_BMfont5, GRRLIB_WHITE, 1, "Date Time: %s", timeLine);
 
-		GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
-		GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Track: %s", entryName);
 		// If volume was updated, set the volume
 		if(vol_updated) {
 			GRRLIB_Printf(500, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
 			vol_updated--;
 		}
+		
+		// Trigger the hourly alarm
+		if((num_hourly && hourlyAlarmOn && !continuousPlayOn && !(alarmOn && !alarmMins)) && tmpTime->tm_min == 0 && !hourlyGoingOff) {
+			print_gecko("Hourly alarm triggered!\r\n");
+			hourlyGoingOff = 1;
+		}
+		
+		// End the hourly alarm
+		if((num_hourly && hourlyAlarmOn && hourlyGoingOff) && tmpTime->tm_min != 0) {
+			hourlyGoingOff = 0;
+			hourlyChimeHandled = 0;
+		}
+			
+		
+		// Trigger the alarm
+		if(alarmOn && (alarmHrs == tmpTime->tm_hour && alarmMins == tmpTime->tm_min) && !alarmGoingOff) {
+			print_gecko("Alarm triggered!\r\n");
+			alarmGoingOff = 1;
+		}
+		
+		// End the alarm
+		if(alarmOn && alarmGoingOff && (alarmHrs != tmpTime->tm_hour || alarmMins != tmpTime->tm_min)) {
+			alarmGoingOff = 0;
+			alarmSongHandled = 0;
+		}
+		
+		if(menu_state == MENU_SETTINGS) {
+			GRRLIB_Rectangle (80, 80, 500, 300, 0x808080A0, true);
+			if(settings_pos < SETTINGS_CANCEL) {
+				GRRLIB_Rectangle (80, 140 + (settings_pos * 30), 12, 12, 0x808080FF, true);
+			}
+			GRRLIB_Printf(90, 90, tex_BMfont3, GRRLIB_WHITE, 1, "SETTINGS");
+			GRRLIB_Printf(90, 140, tex_BMfont4, GRRLIB_WHITE, 1, "CONTINUOUS PLAY");
+			GRRLIB_Printf(370, 140, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", continuousPlayOn ? "ON" : "OFF");
+			GRRLIB_Printf(90, 170, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM");
+			GRRLIB_Printf(370, 170, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", alarmOn ? "ON" : "OFF");
+			GRRLIB_Printf(90, 200, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM HOUR");
+			GRRLIB_Printf(370, 200, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmHrs);
+			GRRLIB_Printf(90, 230, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM MINUTE");
+			GRRLIB_Printf(370, 230, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmMins);
+			GRRLIB_Printf(90, 260, tex_BMfont4, GRRLIB_WHITE, 1, "HOURLY ALARM");
+			GRRLIB_Printf(370, 260, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", num_hourly ? (hourlyAlarmOn ? "ON" : "OFF") : "NOT AVAIL");
+			GRRLIB_Printf(420, 300, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_CANCEL ? "(CANCEL)" : "CANCEL");
+			GRRLIB_Printf(420, 340, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_SAVE ? "(SAVE)" : "SAVE");
+		
+		}
+		
+		// Handle a message box
+		if(menu_state == MENU_MSGBOX) {
+			GRRLIB_Rectangle (80, 160, 500, 200, 0x808080A0, true);
+			if(msgBoxTitle != NULL)
+				GRRLIB_Printf(90, 170, tex_BMfont5, GRRLIB_WHITE, 2, "%s", msgBoxTitle);
+			if(msgBoxMsg != NULL)
+				GRRLIB_Printf(90, 240, tex_BMfont5, GRRLIB_WHITE, 1, "%s", msgBoxMsg);
+			msgBoxTimer--;
+			if(!msgBoxTimer) {
+				menu_state = NOT_IN_MENU;
+			}
+		}
 
-        if(wpaddown & WPAD_BUTTON_HOME) {
-            break;
-        }
-        if(wpaddown & WPAD_BUTTON_LEFT) {
-			change_entry = -1;
-        }
-        else if(wpaddown & WPAD_BUTTON_RIGHT) {
-			change_entry = 1;
-        }
-        else if(wpadheld & WPAD_BUTTON_UP) {
-			if(vol<256) {vol++; MP3Player_Volume(vol);}
-			vol_updated = 300;	// ~5 sec volume display
-        }
-        else if(wpadheld & WPAD_BUTTON_DOWN) {
-			if(vol>0) {vol--; MP3Player_Volume(vol);}
-			vol_updated = 300;	// ~5 sec volume display
-        }
-        else if(wpaddown & WPAD_BUTTON_MINUS) {
-			change_album = -1;
-        }
-        else if(wpaddown & WPAD_BUTTON_PLUS) {
-			change_album = 1;
-        }
-		else if(wpaddown & WPAD_BUTTON_1) {
-			change_entry_rand = 1;
-        }
+		// Handle input
+		if(menu_state == NOT_IN_MENU) {
+			// main screen input
+			if(wpaddown & WPAD_BUTTON_HOME) {
+				break;
+			}
+			if(wpaddown & WPAD_BUTTON_LEFT) {
+				change_entry = -1;
+			}
+			else if(wpaddown & WPAD_BUTTON_RIGHT) {
+				change_entry = 1;
+			}
+			else if(wpadheld & WPAD_BUTTON_UP) {
+				if(vol<256) {vol++; MP3Player_Volume(vol);}
+				vol_updated = 300;	// ~5 sec volume display
+			}
+			else if(wpadheld & WPAD_BUTTON_DOWN) {
+				if(vol>0) {vol--; MP3Player_Volume(vol);}
+				vol_updated = 300;	// ~5 sec volume display
+			}
+			else if(wpaddown & WPAD_BUTTON_MINUS) {
+				change_album = -1;
+			}
+			else if(wpaddown & WPAD_BUTTON_PLUS) {
+				change_album = 1;
+			}
+			else if(wpaddown & WPAD_BUTTON_1) {
+				change_entry_rand = 1;
+			}
+			else if(wpaddown & WPAD_BUTTON_2) {
+				menu_state = MENU_SETTINGS;
+				settings_pos = 0;
+			}
+		}
+		else if(menu_state == MENU_SETTINGS) {
+			if(!num_hourly) {
+				hourlyAlarmOn = 0;
+			}
+			// settings menu
+			int oldContinuousPlayOn = continuousPlayOn;
+			if(wpaddown & WPAD_BUTTON_B) {
+				menu_state = NOT_IN_MENU;
+			}
+			else if(wpaddown & WPAD_BUTTON_UP) {
+				settings_pos = (settings_pos == 0) ? SETTING_MAX-1 : settings_pos-1;
+			}
+			else if(wpaddown & WPAD_BUTTON_DOWN) {
+				settings_pos = (settings_pos == SETTING_MAX-1) ? 0 : settings_pos+1;
+			}
+			else if(wpaddown & WPAD_BUTTON_RIGHT) {
+				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
+					continuousPlayOn^=1;
+					alarmOn = !continuousPlayOn;
+				}
+				if(settings_pos == SETTING_ALARM_ON_OFF) {
+					alarmOn^=1;
+					continuousPlayOn = !alarmOn;
+				}
+				if((settings_pos == SETTING_HOURLY_ON_OFF) && num_hourly) {
+					hourlyAlarmOn^=1;
+				}
+				if(settings_pos == SETTING_ALARM_TIME_HRS) {
+					alarmHrs = alarmHrs == 23 ? 0 : alarmHrs+1;
+				}
+				if(settings_pos == SETTING_ALARM_TIME_MINS) {
+					alarmMins = alarmMins == 59 ? 0 : alarmMins+1;
+				}
+			}
+			else if(wpaddown & WPAD_BUTTON_LEFT) {
+				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
+					continuousPlayOn^=1;
+					alarmOn = !continuousPlayOn;
+				}
+				if(settings_pos == SETTING_ALARM_ON_OFF) {
+					alarmOn^=1;
+					continuousPlayOn = !alarmOn;
+				}
+				if((settings_pos == SETTING_HOURLY_ON_OFF) && num_hourly) {
+					hourlyAlarmOn^=1;
+				}
+				if(settings_pos == SETTING_ALARM_TIME_HRS) {
+					alarmHrs = alarmHrs == 0 ? 23 : alarmHrs-1;
+				}
+				if(settings_pos == SETTING_ALARM_TIME_MINS) {
+					alarmMins = alarmMins == 0 ? 59 : alarmMins-1;
+				}
+			}
+			else if(wpaddown & WPAD_BUTTON_A) {
+				if(settings_pos == SETTINGS_SAVE) {
+					msgBoxTitle = "Settings";
+					msgBoxMsg = "Saved Successfully";
+					msgBoxTimer = 300;
+					menu_state = MENU_MSGBOX;
+				}
+				else if(settings_pos == SETTINGS_CANCEL) {
+					menu_state = NOT_IN_MENU;
+				}
+			}
+			// If we were just playing and now we're not, handle that etc.
+			if(continuousPlayOn != oldContinuousPlayOn) {
+				if(oldContinuousPlayOn) {
+					MP3Player_Stop();
+					if(mp3File) {
+						fclose(mp3File);
+					}
+				}
+				else {
+					change_entry_rand = 1;
+				}
+			}
+			
+			
+		}
         //if(wpadheld & WPAD_BUTTON_1 && wpadheld & WPAD_BUTTON_2) {
         //    WPAD_Rumble(WPAD_CHAN_0, 1); // Rumble on
         //    GRRLIB_ScrShot("sd:/grrlib.png");
@@ -434,7 +704,7 @@ int main() {
 
         GRRLIB_Render();
         FPS = CalculateFrameRate();
-		if(!MP3Player_IsPlaying()) {
+		if(continuousPlayOn && !MP3Player_IsPlaying()) {
 			change_entry = 1;
 		}
     }
