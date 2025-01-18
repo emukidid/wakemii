@@ -506,7 +506,9 @@ int main() {
 				// Draw the cover
 				GRRLIB_DrawImg(coverStartX, coverStartY, cover, 0, MIN(coverScaledW, coverScaledH), MIN(coverScaledW, coverScaledH), GRRLIB_WHITE);  
 			}
-			GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
+			if(!hourlyGoingOff) {
+				GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
+			}
 			GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Track: %s", entryName);
 		}
 		
