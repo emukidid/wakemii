@@ -80,6 +80,7 @@ enum setting_pos_enum {
 	SETTING_ALARM_TIME_HRS,
 	SETTING_ALARM_TIME_MINS,
 	SETTING_HOURLY_ON_OFF,
+	SETTING_SHUTDOWN_AFTER_ALARM,
 	SETTINGS_CANCEL,
 	SETTINGS_SAVE,
 	SETTING_MAX
@@ -98,6 +99,7 @@ static int alarmMins = 0;
 static int hourlyAlarmOn = 0;
 static int alarmGoingOff = 0;
 static int hourlyGoingOff = 0;
+static int shutdownAfterAlarm = 0;
 
 char* getCoverExtensionFromType(enum cover_type_t coverType) {
 	switch(coverType) {
@@ -249,6 +251,93 @@ void ShutdownWii() {
 	shutdown = 1;
 }
 
+void loadSettings() {
+	FILE *fp = fopen("/wakemii/settings.cfg", "rb");
+	if(!fp) {
+		print_gecko("settings.cfg not found\r\n");
+		return;
+	}
+	fseek(fp, 0L, SEEK_END);
+	size_t size = ftell(fp);
+	fseek(fp, 0L, SEEK_SET);
+	if(size > 1024*1024) {
+		print_gecko("settings.cfg is too large!\r\n");
+		return;
+	}
+	char *fileContentsBuffer = calloc(1, size);
+	size_t ret = fread(fileContentsBuffer, 1, size, fp);
+	fclose(fp);
+	if(ret != size) {
+		print_gecko("settings.cfg failed to read (expected %d got %d)\r\n", size, ret);
+		return;
+	}
+	
+	// parse back to our vars
+	char *line, *linectx = NULL;
+	line = strtok_r( fileContentsBuffer, "\r\n", &linectx );
+	while( line != NULL ) {
+		//print_gecko("Line [%s]\r\n", line);
+		if(line[0] != '#') {
+			char *name, *value = NULL;
+			name = strtok_r(line, "=", &value);
+			
+			if(value != NULL) {
+				//print_gecko("Name [%s] Value [%s]\r\n", name, value);
+				if(!strcmp("Continuous Play", name)) {
+					continuousPlayOn = !strcmp("yes", value);
+				}
+				else if(!strcmp("Alarm On", name)) {
+					alarmOn = !strcmp("yes", value);
+				}
+				else if(!strcmp("Hourly Alarm On", name)) {
+					hourlyAlarmOn = !strcmp("yes", value);
+				}
+				else if(!strcmp("Shutdown after alarm", name)) {
+					shutdownAfterAlarm = !strcmp("yes", value);
+				}
+				else if(!strcmp("Alarm Hour", name)) {
+					alarmHrs = atoi(value);
+				}
+				else if(!strcmp("Alarm Minute", name)) {
+					alarmMins = atoi(value);
+				}
+			}
+		}
+		// And round we go again
+		line = strtok_r( NULL, "\r\n", &linectx);
+	}
+}
+
+bool saveSettings() {
+	char *configString = NULL;
+	size_t len = 0;
+	FILE *fp = open_memstream(&configString, &len);
+	if(!fp) return false;
+
+	// Write in a format we can parse later
+	fprintf(fp, "# WakeMii configuration file, do not edit anything unless you know what you're doing!\r\n");
+	fprintf(fp, "Continuous Play=%s\r\n", continuousPlayOn ? "yes":"no");
+	fprintf(fp, "Alarm On=%s\r\n", alarmOn ? "yes":"no");
+	fprintf(fp, "Alarm Hour=%02d\r\n", alarmHrs);
+	fprintf(fp, "Alarm Minute=%02d\r\n", alarmMins);
+	fprintf(fp, "Hourly Alarm On=%s\r\n", hourlyAlarmOn ? "yes":"no");
+	fprintf(fp, "Shutdown after alarm=%s\r\n", shutdownAfterAlarm ? "yes":"no");
+	fclose(fp);
+	
+	fp = fopen("/wakemii/settings.cfg", "wb");
+	if(!fp) {
+		print_gecko("settings.cfg failed to create\r\n");
+		return false;
+	}
+	int res = fwrite(configString, 1, len, fp);
+	if(res != len) {
+		print_gecko("settings.cfg failed to write (expected to write %d wrote %d)\r\n", len, res);
+		return false;
+	}
+	fclose(fp);
+	return true;
+}
+
 int main() {
 	
 	if(usb_isgeckoalive(1)) {
@@ -345,6 +434,12 @@ int main() {
 	}
 	closedir(dp);
 	print_gecko("Found %i hourly chimes\r\n", num_hourly);
+	
+	// Load settings
+	loadSettings();
+	if(!num_hourly && hourlyAlarmOn) {
+		hourlyAlarmOn = 0;
+	}
 	
 	// Pick a random album + display its artwork
 	srand(gettick());
@@ -509,16 +604,30 @@ int main() {
 			if(!hourlyGoingOff) {
 				GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
 			}
-			GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, "Track: %s", entryName);
+			char *trackNameWithLabel = calloc(1, 1024);
+			sprintf(trackNameWithLabel, "Track: %.*s", strlen(entryName)-4, entryName);
+			GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, trackNameWithLabel);
+			free(trackNameWithLabel);
 		}
 		
 		// Print general stuff
 		time(&curtime);
 		struct tm *tmpTime = gmtime(&curtime);
 		GRRLIB_Printf(50, 25, tex_BMfont3, GRRLIB_WHITE, 1, "WAKEMII");
-		strftime(timeLine, sizeof(timeLine), "%Y-%m-%d %H:%M:%S", localtime(&curtime));
         GRRLIB_Printf(350, 27, tex_BMfont5, GRRLIB_WHITE, 1, "Current FPS: %d | Mem Free %.2fMB", FPS, (SYS_GetArena1Hi()-SYS_GetArena1Lo())/(1048576.0f));
-		GRRLIB_Printf(350, 47, tex_BMfont5, GRRLIB_WHITE, 1, "Date Time: %s", timeLine);
+		if(!continuousPlayOn) {
+			if(tmpTime->tm_sec % 2) {
+				strftime(timeLine, sizeof(timeLine), "%H:%M", localtime(&curtime));
+			}
+			else {
+				strftime(timeLine, sizeof(timeLine), "%H %M", localtime(&curtime));
+			}
+			GRRLIB_Printf(90, 150, tex_BMfont3, GRRLIB_WHITE, 3, "%s", timeLine);
+		}
+		else {
+			strftime(timeLine, sizeof(timeLine), "%Y-%m-%d %H:%M:%S", localtime(&curtime));
+			GRRLIB_Printf(350, 47, tex_BMfont5, GRRLIB_WHITE, 1, "Date Time: %s", timeLine);
+		}
 
 		// If volume was updated, set the volume
 		if(vol_updated) {
@@ -549,6 +658,7 @@ int main() {
 		if(alarmOn && alarmGoingOff && (alarmHrs != tmpTime->tm_hour || alarmMins != tmpTime->tm_min)) {
 			alarmGoingOff = 0;
 			alarmSongHandled = 0;
+			if(shutdownAfterAlarm) shutdown = 1;
 		}
 		
 		if(menu_state == MENU_SETTINGS) {
@@ -558,17 +668,19 @@ int main() {
 			}
 			GRRLIB_Printf(90, 90, tex_BMfont3, GRRLIB_WHITE, 1, "SETTINGS");
 			GRRLIB_Printf(90, 140, tex_BMfont4, GRRLIB_WHITE, 1, "CONTINUOUS PLAY");
-			GRRLIB_Printf(370, 140, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", continuousPlayOn ? "ON" : "OFF");
+			GRRLIB_Printf(420, 140, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", continuousPlayOn ? "ON" : "OFF");
 			GRRLIB_Printf(90, 170, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM");
-			GRRLIB_Printf(370, 170, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", alarmOn ? "ON" : "OFF");
+			GRRLIB_Printf(420, 170, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", alarmOn ? "ON" : "OFF");
 			GRRLIB_Printf(90, 200, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM HOUR");
-			GRRLIB_Printf(370, 200, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmHrs);
+			GRRLIB_Printf(420, 200, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmHrs);
 			GRRLIB_Printf(90, 230, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM MINUTE");
-			GRRLIB_Printf(370, 230, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmMins);
+			GRRLIB_Printf(420, 230, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmMins);
 			GRRLIB_Printf(90, 260, tex_BMfont4, GRRLIB_WHITE, 1, "HOURLY ALARM");
-			GRRLIB_Printf(370, 260, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", num_hourly ? (hourlyAlarmOn ? "ON" : "OFF") : "NOT AVAIL");
-			GRRLIB_Printf(420, 300, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_CANCEL ? "(CANCEL)" : "CANCEL");
-			GRRLIB_Printf(420, 340, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_SAVE ? "(SAVE)" : "SAVE");
+			GRRLIB_Printf(420, 260, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", num_hourly ? (hourlyAlarmOn ? "ON" : "OFF") : "NOT AVAIL");
+			GRRLIB_Printf(90, 290, tex_BMfont4, GRRLIB_WHITE, 1, "SHUTDOWN AFTER ALARM");
+			GRRLIB_Printf(420, 290, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", shutdownAfterAlarm ? "YES" : "NO");
+			GRRLIB_Printf(420, 315, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_CANCEL ? "(CANCEL)" : "CANCEL");
+			GRRLIB_Printf(420, 345, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_SAVE ? "(SAVE)" : "SAVE");
 		
 		}
 		
@@ -637,11 +749,15 @@ int main() {
 			else if(wpaddown & WPAD_BUTTON_RIGHT) {
 				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
 					continuousPlayOn^=1;
-					alarmOn = !continuousPlayOn;
+					if(alarmOn && continuousPlayOn) {
+						alarmOn = 0;
+					}
 				}
 				if(settings_pos == SETTING_ALARM_ON_OFF) {
 					alarmOn^=1;
-					continuousPlayOn = !alarmOn;
+					if(alarmOn && continuousPlayOn) {
+						continuousPlayOn = 0;
+					}
 				}
 				if((settings_pos == SETTING_HOURLY_ON_OFF) && num_hourly) {
 					hourlyAlarmOn^=1;
@@ -652,15 +768,22 @@ int main() {
 				if(settings_pos == SETTING_ALARM_TIME_MINS) {
 					alarmMins = alarmMins == 59 ? 0 : alarmMins+1;
 				}
+				if(settings_pos == SETTING_SHUTDOWN_AFTER_ALARM) {
+					shutdownAfterAlarm ^= 1;
+				}
 			}
 			else if(wpaddown & WPAD_BUTTON_LEFT) {
 				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
 					continuousPlayOn^=1;
-					alarmOn = !continuousPlayOn;
+					if(alarmOn && continuousPlayOn) {
+						alarmOn = 0;
+					}
 				}
 				if(settings_pos == SETTING_ALARM_ON_OFF) {
 					alarmOn^=1;
-					continuousPlayOn = !alarmOn;
+					if(alarmOn && continuousPlayOn) {
+						continuousPlayOn = 0;
+					}
 				}
 				if((settings_pos == SETTING_HOURLY_ON_OFF) && num_hourly) {
 					hourlyAlarmOn^=1;
@@ -671,11 +794,19 @@ int main() {
 				if(settings_pos == SETTING_ALARM_TIME_MINS) {
 					alarmMins = alarmMins == 0 ? 59 : alarmMins-1;
 				}
+				if(settings_pos == SETTING_SHUTDOWN_AFTER_ALARM) {
+					shutdownAfterAlarm ^= 1;
+				}
 			}
 			else if(wpaddown & WPAD_BUTTON_A) {
 				if(settings_pos == SETTINGS_SAVE) {
 					msgBoxTitle = "Settings";
-					msgBoxMsg = "Saved Successfully";
+					if(saveSettings()) {
+						msgBoxMsg = "Saved Successfully";
+					}
+					else {
+						msgBoxMsg = "Save failed!";
+					}
 					msgBoxTimer = 300;
 					menu_state = MENU_MSGBOX;
 				}
