@@ -76,6 +76,7 @@ enum menu_state_enum {
 static enum menu_state_enum menu_state = NOT_IN_MENU;
 enum setting_pos_enum {
 	SETTING_CONTINUOUS_PLAY_ON_OFF,
+	SETTING_CONTINUOUS_PLAY_TYPE,
 	SETTING_ALARM_ON_OFF,
 	SETTING_ALARM_TIME_HRS,
 	SETTING_ALARM_TIME_MINS,
@@ -91,8 +92,12 @@ static int msgBoxTimer = 0;
 static char* msgBoxTitle = NULL;
 static char* msgBoxMsg = NULL;
 
+#define CONT_PLAY_TYPE_SEQUENTIAL 0
+#define CONT_PLAY_TYPE_SHUFFLE 1
+
 // Alarm stuff
 static int continuousPlayOn = 1;
+static int continuousPlayType = CONT_PLAY_TYPE_SEQUENTIAL;
 static int alarmOn = 0;
 static int alarmHrs = 7;
 static int alarmMins = 0;
@@ -301,6 +306,9 @@ void loadSettings() {
 				else if(!strcmp("Alarm Minute", name)) {
 					alarmMins = atoi(value);
 				}
+				else if(!strcmp("Continuous Play Type", name)) {
+					continuousPlayType = !strcmp("shuffle", value) ? CONT_PLAY_TYPE_SHUFFLE : CONT_PLAY_TYPE_SEQUENTIAL;
+				}
 			}
 		}
 		// And round we go again
@@ -317,6 +325,7 @@ bool saveSettings() {
 	// Write in a format we can parse later
 	fprintf(fp, "# WakeMii configuration file, do not edit anything unless you know what you're doing!\r\n");
 	fprintf(fp, "Continuous Play=%s\r\n", continuousPlayOn ? "yes":"no");
+	fprintf(fp, "Continuous Play Type=%s\r\n", continuousPlayType == CONT_PLAY_TYPE_SHUFFLE ? "shuffle":"sequential");
 	fprintf(fp, "Alarm On=%s\r\n", alarmOn ? "yes":"no");
 	fprintf(fp, "Alarm Hour=%02d\r\n", alarmHrs);
 	fprintf(fp, "Alarm Minute=%02d\r\n", alarmMins);
@@ -602,11 +611,11 @@ int main() {
 				GRRLIB_DrawImg(coverStartX, coverStartY, cover, 0, MIN(coverScaledW, coverScaledH), MIN(coverScaledW, coverScaledH), GRRLIB_WHITE);  
 			}
 			if(!hourlyGoingOff) {
-				GRRLIB_Printf(100, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
+				GRRLIB_Printf(100, scrHeight-90, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
 			}
 			char *trackNameWithLabel = calloc(1, 1024);
 			sprintf(trackNameWithLabel, "Track: %.*s", strlen(entryName)-4, entryName);
-			GRRLIB_Printf(100, scrHeight-40, tex_BMfont5, GRRLIB_WHITE, 1, trackNameWithLabel);
+			GRRLIB_Printf(100, scrHeight-70, tex_BMfont5, GRRLIB_WHITE, 1, trackNameWithLabel);
 			free(trackNameWithLabel);
 		}
 		
@@ -631,7 +640,7 @@ int main() {
 
 		// If volume was updated, set the volume
 		if(vol_updated) {
-			GRRLIB_Printf(500, scrHeight-60, tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
+			GRRLIB_Printf(500, scrHeight-70, tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
 			vol_updated--;
 		}
 		
@@ -662,25 +671,27 @@ int main() {
 		}
 		
 		if(menu_state == MENU_SETTINGS) {
-			GRRLIB_Rectangle (80, 80, 500, 300, 0x808080A0, true);
+			GRRLIB_Rectangle (80, 80, 540, 330, 0x808080A0, true);
 			if(settings_pos < SETTINGS_CANCEL) {
-				GRRLIB_Rectangle (80, 140 + (settings_pos * 30), 12, 12, 0x808080FF, true);
+				GRRLIB_Rectangle (80, 140 + (settings_pos * 30), 12, 12, 0x8A8A8AFF, true);
 			}
 			GRRLIB_Printf(90, 90, tex_BMfont3, GRRLIB_WHITE, 1, "SETTINGS");
 			GRRLIB_Printf(90, 140, tex_BMfont4, GRRLIB_WHITE, 1, "CONTINUOUS PLAY");
 			GRRLIB_Printf(420, 140, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", continuousPlayOn ? "ON" : "OFF");
-			GRRLIB_Printf(90, 170, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM");
-			GRRLIB_Printf(420, 170, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", alarmOn ? "ON" : "OFF");
-			GRRLIB_Printf(90, 200, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM HOUR");
-			GRRLIB_Printf(420, 200, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmHrs);
-			GRRLIB_Printf(90, 230, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM MINUTE");
-			GRRLIB_Printf(420, 230, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmMins);
-			GRRLIB_Printf(90, 260, tex_BMfont4, GRRLIB_WHITE, 1, "HOURLY ALARM");
-			GRRLIB_Printf(420, 260, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", num_hourly ? (hourlyAlarmOn ? "ON" : "OFF") : "NOT AVAIL");
-			GRRLIB_Printf(90, 290, tex_BMfont4, GRRLIB_WHITE, 1, "SHUTDOWN AFTER ALARM");
-			GRRLIB_Printf(420, 290, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", shutdownAfterAlarm ? "YES" : "NO");
-			GRRLIB_Printf(420, 315, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_CANCEL ? "(CANCEL)" : "CANCEL");
-			GRRLIB_Printf(420, 345, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_SAVE ? "(SAVE)" : "SAVE");
+			GRRLIB_Printf(90, 170, tex_BMfont4, GRRLIB_WHITE, 1, "CONTINUOUS PLAY TYPE");
+			GRRLIB_Printf(420, 170, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", continuousPlayType == CONT_PLAY_TYPE_SHUFFLE ? "SHUFFLE" : "SEQUENTIAL");
+			GRRLIB_Printf(90, 200, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM");
+			GRRLIB_Printf(420, 200, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", alarmOn ? "ON" : "OFF");
+			GRRLIB_Printf(90, 230, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM HOUR");
+			GRRLIB_Printf(420, 230, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmHrs);
+			GRRLIB_Printf(90, 260, tex_BMfont4, GRRLIB_WHITE, 1, "ALARM MINUTE");
+			GRRLIB_Printf(420, 260, tex_BMfont4, GRRLIB_WHITE, 1, "%02d", alarmMins);
+			GRRLIB_Printf(90, 290, tex_BMfont4, GRRLIB_WHITE, 1, "HOURLY ALARM");
+			GRRLIB_Printf(420, 290, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", num_hourly ? (hourlyAlarmOn ? "ON" : "OFF") : "NOT AVAIL");
+			GRRLIB_Printf(90, 320, tex_BMfont4, GRRLIB_WHITE, 1, "SHUTDOWN AFTER ALARM");
+			GRRLIB_Printf(420, 320, tex_BMfont4, GRRLIB_WHITE, 1, "[%s]", shutdownAfterAlarm ? "YES" : "NO");
+			GRRLIB_Printf(420, 345, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_CANCEL ? "(CANCEL)" : "CANCEL");
+			GRRLIB_Printf(420, 370, tex_BMfont4, GRRLIB_WHITE, 1, settings_pos == SETTINGS_SAVE ? "(SAVE)" : "SAVE");
 		
 		}
 		
@@ -771,6 +782,9 @@ int main() {
 				if(settings_pos == SETTING_SHUTDOWN_AFTER_ALARM) {
 					shutdownAfterAlarm ^= 1;
 				}
+				if(settings_pos == SETTING_CONTINUOUS_PLAY_TYPE) {
+					continuousPlayType ^= 1;
+				}
 			}
 			else if(wpaddown & WPAD_BUTTON_LEFT) {
 				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
@@ -797,6 +811,9 @@ int main() {
 				if(settings_pos == SETTING_SHUTDOWN_AFTER_ALARM) {
 					shutdownAfterAlarm ^= 1;
 				}
+				if(settings_pos == SETTING_CONTINUOUS_PLAY_TYPE) {
+					continuousPlayType ^= 1;
+				}
 			}
 			else if(wpaddown & WPAD_BUTTON_A) {
 				if(settings_pos == SETTINGS_SAVE) {
@@ -807,7 +824,7 @@ int main() {
 					else {
 						msgBoxMsg = "Save failed!";
 					}
-					msgBoxTimer = 300;
+					msgBoxTimer = 150;
 					menu_state = MENU_MSGBOX;
 				}
 				else if(settings_pos == SETTINGS_CANCEL) {
@@ -838,7 +855,12 @@ int main() {
         GRRLIB_Render();
         FPS = CalculateFrameRate();
 		if(continuousPlayOn && !MP3Player_IsPlaying()) {
-			change_entry = 1;
+			if(continuousPlayType == CONT_PLAY_TYPE_SEQUENTIAL) {
+				change_entry = 1;
+			}
+			else {
+				change_entry_rand = 1;
+			}
 		}
     }
     // Free some textures
