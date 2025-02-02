@@ -5,15 +5,19 @@
 ============================================*/
 #include <grrlib.h>
 
-#include <ogc/lwp_watchdog.h>   // Needed for gettime and ticks_to_millisecs
+#include <ogc/lwp_watchdog.h>
 #include <stdlib.h>
-#include <wiiuse/wpad.h>
 #include <unistd.h>
 #include <sys/dir.h>
 #include <fat.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <mp3player.h>
+#ifdef HW_RVL
+#include <wiiuse/wpad.h>
+#else
+#include <sdcard/gcsd.h>
+#endif
 
 #include "BMfont1_png.h"
 #include "BMfont2_png.h"
@@ -41,6 +45,33 @@
 #define GRRLIB_FUCHSIA 0xFF00FFFF
 #define GRRLIB_AQUA    0x00FFFFFF
 #define GRRLIB_WHITE   0xFFFFFFFF
+
+// Buttons
+#ifdef HW_RVL
+#define BTN_EXIT (WPAD_BUTTON_HOME)
+#define BTN_LEFT (WPAD_BUTTON_LEFT)
+#define BTN_RIGHT (WPAD_BUTTON_RIGHT)
+#define BTN_UP (WPAD_BUTTON_UP)
+#define BTN_DOWN (WPAD_BUTTON_DOWN)
+#define BTN_PREV_ALBUM (WPAD_BUTTON_MINUS)
+#define BTN_NEXT_ALBUM (WPAD_BUTTON_PLUS)
+#define BTN_RAND_TRACK (WPAD_BUTTON_1)
+#define BTN_SETTINGS (WPAD_BUTTON_2)
+#define BTN_ACK (WPAD_BUTTON_A)
+#define BTN_CANCEL (WPAD_BUTTON_B)
+#else
+#define BTN_EXIT (PAD_BUTTON_START)
+#define BTN_LEFT (PAD_BUTTON_LEFT)
+#define BTN_RIGHT (PAD_BUTTON_RIGHT)
+#define BTN_UP (PAD_BUTTON_UP)
+#define BTN_DOWN (PAD_BUTTON_DOWN)
+#define BTN_PREV_ALBUM (PAD_TRIGGER_L)
+#define BTN_NEXT_ALBUM (PAD_TRIGGER_R)
+#define BTN_RAND_TRACK (PAD_BUTTON_X)
+#define BTN_SETTINGS (PAD_TRIGGER_Z)
+#define BTN_ACK (PAD_BUTTON_A)
+#define BTN_CANCEL (PAD_BUTTON_B)
+#endif
 
 #define MAX_ALBUMS 4096
 
@@ -252,9 +283,11 @@ GRRLIB_texImg* getCoverFromIdx(int randAlbumNum, float* coverScaledW, float* cov
 }
 
 static int shutdown = 0;
+#ifdef HW_RVL
 void ShutdownWii() {
 	shutdown = 1;
 }
+#endif
 
 void loadSettings() {
 	FILE *fp = fopen("/wakemii/settings.cfg", "rb");
@@ -364,11 +397,15 @@ int main() {
 	scrWidth = videoMode->viWidth;
 	scrHeight = videoMode->viHeight;
 
+#ifdef HW_RVL
     WPAD_Init();
 	WPAD_SetIdleTimeout(120);
 	WPAD_SetPowerButtonCallback((WPADShutdownCallback) ShutdownWii);
 	SYS_SetPowerCallback(ShutdownWii);
     WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS);
+#else
+	fatMountSimple("/", &__io_gcsd2);
+#endif
 
     GRRLIB_bytemapFont *bmf_Font1 = GRRLIB_LoadBMF(ocean_bmf);
     GRRLIB_bytemapFont *bmf_Font2 = GRRLIB_LoadBMF(frontal_bmf);
@@ -489,7 +526,11 @@ int main() {
     while(1) {
 		if(shutdown) {
 			MP3Player_Stop();
+#ifdef HW_RVL
 			SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+#else
+			SYS_ResetSystem(SYS_HOTRESET, 0, FALSE);
+#endif
 		}
 		// If we're not on continuous play, nop out any nav actions for songs.
 		if(!continuousPlayOn && !alarmGoingOff) {
@@ -600,9 +641,15 @@ int main() {
 		}
 		
 		// Scan for input
+#ifdef HW_RVL
         WPAD_ScanPads();
-        const u32 wpaddown = WPAD_ButtonsDown(0);
-        const u32 wpadheld = WPAD_ButtonsHeld(0);
+        const u32 paddown = WPAD_ButtonsDown(0);
+        const u32 padheld = WPAD_ButtonsHeld(0);
+#else
+		PAD_ScanPads();
+		const u32 paddown = PAD_ButtonsDown(0);
+        const u32 padheld = PAD_ButtonsHeld(0);
+#endif
 
         GRRLIB_FillScreen(GRRLIB_BLACK);    // Clear the screen
 		if(mp3File && MP3Player_IsPlaying()) {
@@ -711,33 +758,33 @@ int main() {
 		// Handle input
 		if(menu_state == NOT_IN_MENU) {
 			// main screen input
-			if(wpaddown & WPAD_BUTTON_HOME) {
+			if(paddown & BTN_EXIT) {
 				break;
 			}
-			if(wpaddown & WPAD_BUTTON_LEFT) {
+			if(paddown & BTN_LEFT) {
 				change_entry = -1;
 			}
-			else if(wpaddown & WPAD_BUTTON_RIGHT) {
+			else if(paddown & BTN_RIGHT) {
 				change_entry = 1;
 			}
-			else if(wpadheld & WPAD_BUTTON_UP) {
+			else if(padheld & BTN_UP) {
 				if(vol<256) {vol++; MP3Player_Volume(vol);}
 				vol_updated = 300;	// ~5 sec volume display
 			}
-			else if(wpadheld & WPAD_BUTTON_DOWN) {
+			else if(padheld & BTN_DOWN) {
 				if(vol>0) {vol--; MP3Player_Volume(vol);}
 				vol_updated = 300;	// ~5 sec volume display
 			}
-			else if(wpaddown & WPAD_BUTTON_MINUS) {
+			else if(paddown & BTN_PREV_ALBUM) {
 				change_album = -1;
 			}
-			else if(wpaddown & WPAD_BUTTON_PLUS) {
+			else if(paddown & BTN_NEXT_ALBUM) {
 				change_album = 1;
 			}
-			else if(wpaddown & WPAD_BUTTON_1) {
+			else if(paddown & BTN_RAND_TRACK) {
 				change_entry_rand = 1;
 			}
-			else if(wpaddown & WPAD_BUTTON_2) {
+			else if(paddown & BTN_SETTINGS) {
 				menu_state = MENU_SETTINGS;
 				settings_pos = 0;
 			}
@@ -748,16 +795,16 @@ int main() {
 			}
 			// settings menu
 			int oldContinuousPlayOn = continuousPlayOn;
-			if(wpaddown & WPAD_BUTTON_B) {
+			if(paddown & BTN_CANCEL) {
 				menu_state = NOT_IN_MENU;
 			}
-			else if(wpaddown & WPAD_BUTTON_UP) {
+			else if(paddown & BTN_UP) {
 				settings_pos = (settings_pos == 0) ? SETTING_MAX-1 : settings_pos-1;
 			}
-			else if(wpaddown & WPAD_BUTTON_DOWN) {
+			else if(paddown & BTN_DOWN) {
 				settings_pos = (settings_pos == SETTING_MAX-1) ? 0 : settings_pos+1;
 			}
-			else if(wpaddown & WPAD_BUTTON_RIGHT) {
+			else if(paddown & BTN_RIGHT) {
 				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
 					continuousPlayOn^=1;
 					if(alarmOn && continuousPlayOn) {
@@ -786,7 +833,7 @@ int main() {
 					continuousPlayType ^= 1;
 				}
 			}
-			else if(wpaddown & WPAD_BUTTON_LEFT) {
+			else if(paddown & BTN_LEFT) {
 				if(settings_pos == SETTING_CONTINUOUS_PLAY_ON_OFF) {
 					continuousPlayOn^=1;
 					if(alarmOn && continuousPlayOn) {
@@ -815,7 +862,7 @@ int main() {
 					continuousPlayType ^= 1;
 				}
 			}
-			else if(wpaddown & WPAD_BUTTON_A) {
+			else if(paddown & BTN_ACK) {
 				if(settings_pos == SETTINGS_SAVE) {
 					msgBoxTitle = "Settings";
 					if(saveSettings()) {
@@ -846,11 +893,6 @@ int main() {
 			
 			
 		}
-        //if(wpadheld & WPAD_BUTTON_1 && wpadheld & WPAD_BUTTON_2) {
-        //    WPAD_Rumble(WPAD_CHAN_0, 1); // Rumble on
-        //    GRRLIB_ScrShot("sd:/grrlib.png");
-        //    WPAD_Rumble(WPAD_CHAN_0, 0); // Rumble off
-        //}
 
         GRRLIB_Render();
         FPS = CalculateFrameRate();
