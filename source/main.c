@@ -396,6 +396,7 @@ int main() {
 	GXRModeObj* videoMode = VIDEO_GetPreferredMode(NULL);
 	scrWidth = videoMode->viWidth;
 	scrHeight = videoMode->viHeight;
+	int palHeightBias = scrHeight > 480 ? 30 : 0;
 
 #ifdef HW_RVL
     WPAD_Init();
@@ -658,11 +659,11 @@ int main() {
 				GRRLIB_DrawImg(coverStartX, coverStartY, cover, 0, MIN(coverScaledW, coverScaledH), MIN(coverScaledW, coverScaledH), GRRLIB_WHITE);  
 			}
 			if(!hourlyGoingOff) {
-				GRRLIB_Printf(100, scrHeight-90, tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
+				GRRLIB_Printf(100, scrHeight-(60+palHeightBias), tex_BMfont5, GRRLIB_WHITE, 1, "Album: %s", albums[randAlbumNum]->name);
 			}
 			char *trackNameWithLabel = calloc(1, 1024);
 			sprintf(trackNameWithLabel, "Track: %.*s", strlen(entryName)-4, entryName);
-			GRRLIB_Printf(100, scrHeight-70, tex_BMfont5, GRRLIB_WHITE, 1, trackNameWithLabel);
+			GRRLIB_Printf(100, scrHeight-(40+palHeightBias), tex_BMfont5, GRRLIB_WHITE, 1, trackNameWithLabel);
 			free(trackNameWithLabel);
 		}
 		
@@ -687,7 +688,7 @@ int main() {
 
 		// If volume was updated, set the volume
 		if(vol_updated) {
-			GRRLIB_Printf(500, scrHeight-70, tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
+			GRRLIB_Printf(500, scrHeight-(40+palHeightBias), tex_BMfont5, GRRLIB_WHITE, 1, "Volume (%i%%)", (int)(((float)vol/(float)256)*100));
 			vol_updated--;
 		}
 		
