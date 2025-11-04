@@ -2,8 +2,8 @@
  <app version="2">
    <name>WakeMii</name>
    <coder>emu_kidid</coder>
-   <version>1.0</version>
-   <release_date>202502020000</release_date>
+   <version>1.1</version>
+   <release_date>202511040000</release_date>
    <short_description>Alarm Clock MP3 Player</short_description>
    <long_description>
 It's an alarm clock app for the Wii which allows you to drop a bunch of "albums" and "hourly" MP3 files with each album also allowing cover-art. It can also be used as a niche MP3 player with features such as prev/next track/album or random play.

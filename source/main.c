@@ -17,6 +17,11 @@
 #include <wiiuse/wpad.h>
 #else
 #include <sdcard/gcsd.h>
+#include <ogc/mmce.h>
+#include <iso9660.h>
+#include <di/di.h>
+#include <ogc/dvd.h>
+static DISC_INTERFACE* gcloader = &__io_gcode;
 #endif
 
 #include "BMfont1_png.h"
@@ -24,6 +29,7 @@
 #include "BMfont3_png.h"
 #include "BMfont4_png.h"
 #include "BMfont5_png.h"
+#include "helpqr_jpg.h"
 #include "ocean_bmf.h"
 #include "frontal_bmf.h"
 
@@ -380,8 +386,79 @@ bool saveSettings() {
 	return true;
 }
 
+#ifndef HW_RVL
+char *getDeviceName() {
+	struct statvfs buf;
+	memset(&buf, 0, sizeof(struct statvfs));
+	
+	int res = statvfs("/", &buf);
+	if(res) {
+		return "Unknown device";
+	}
+	int fsid = buf.f_fsid;
+	
+	if(fsid == DEVICE_TYPE_GAMECUBE_SD(0)) {
+		return "SD (Slot A)";
+	}
+	if(fsid == DEVICE_TYPE_GAMECUBE_SD(1)) {
+		return "SD (Slot B)";
+	}
+	if(fsid == DEVICE_TYPE_GAMECUBE_SD(2)) {
+		return "SD (Serial Port 2)";
+	}
+	if(fsid == DEVICE_TYPE_GAMECUBE_MMCE(0)) {
+		return "SD via MMCE (Slot A)";
+	}
+	if(fsid == DEVICE_TYPE_GAMECUBE_MMCE(1)) {
+		return "SD via MMCE (Slot B)";
+	}
+	if(fsid == DEVICE_TYPE_GAMECUBE_MMCE(2)) {
+		return "SD via MMCE (Serial Port 2)";
+	}
+	return "Unknown device";
+}
+
+static char *deviceName = "Unknown";
+
+int mountStorage() {
+	if(fatMountSimple ("/", gcloader)) {
+		deviceName = "GCLoader";
+		return 1;
+	}
+	if(fatMountSimple ("/", get_io_gcsd2())) {
+		deviceName = getDeviceName();
+		return 1;
+	}
+	if(fatMountSimple ("/", get_io_gcsda())) {
+		deviceName = getDeviceName();
+		return 1;
+	}
+	if(fatMountSimple ("/", get_io_gcsdb())) {
+		deviceName = getDeviceName();
+		return 1;
+	}
+	return 0;
+}
+#endif
+
+void drawErrorAndExit(GRRLIB_texImg *tex_titleFont, GRRLIB_texImg *tex_NormFont, char *errorMsg) {
+	long long startTime = gettime();
+	GRRLIB_texImg *tex_HelpQr = GRRLIB_LoadTexture(helpqr_jpg);
+	while(diff_sec(startTime, gettime()) < 15) {
+		GRRLIB_FillScreen(GRRLIB_BLACK);    // Clear the screen
+		GRRLIB_Rectangle (80, 80, 540, 330, 0x808080A0, true);
+		GRRLIB_Printf(90, 90, tex_titleFont, GRRLIB_WHITE, 1, "ERROR");
+		GRRLIB_Printf(90, 130, tex_NormFont, GRRLIB_MAROON, 1, errorMsg);
+		GRRLIB_DrawImg(220, 160, tex_HelpQr, 0, 0.5f, 0.5f, GRRLIB_WHITE);  
+		GRRLIB_Printf(440, 380, tex_NormFont, GRRLIB_MAROON, 1, "Exiting in 15 seconds.");
+		GRRLIB_Render();
+	}
+	exit(0);
+}
+
 int main() {
 	
+	PAD_Init();
 	if(usb_isgeckoalive(1)) {
 		usb_flush(1);
 		print_usb = 1;
@@ -398,20 +475,9 @@ int main() {
 	scrHeight = videoMode->viHeight;
 	int palHeightBias = scrHeight > 480 ? 30 : 0;
 
-#ifdef HW_RVL
-    WPAD_Init();
-	WPAD_SetIdleTimeout(120);
-	WPAD_SetPowerButtonCallback((WPADShutdownCallback) ShutdownWii);
-	SYS_SetPowerCallback(ShutdownWii);
-    WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS);
-#else
-	fatMountSimple("/", &__io_gcsd2);
-#endif
-
     GRRLIB_bytemapFont *bmf_Font1 = GRRLIB_LoadBMF(ocean_bmf);
     GRRLIB_bytemapFont *bmf_Font2 = GRRLIB_LoadBMF(frontal_bmf);
-
-    GRRLIB_texImg *tex_BMfont1 = GRRLIB_LoadTexture(BMfont1_png);
+	GRRLIB_texImg *tex_BMfont1 = GRRLIB_LoadTexture(BMfont1_png);
     GRRLIB_InitTileSet(tex_BMfont1, 32, 32, 32);
 
     GRRLIB_texImg *tex_BMfont2 = GRRLIB_LoadTexture(BMfont2_png);
@@ -425,11 +491,26 @@ int main() {
 
     GRRLIB_texImg *tex_BMfont5 = GRRLIB_LoadTexture(BMfont5_png);
     GRRLIB_InitTileSet(tex_BMfont5, 8, 16, 0);
+
+#ifdef HW_RVL
+    WPAD_Init();
+	WPAD_SetIdleTimeout(120);
+	WPAD_SetPowerButtonCallback((WPADShutdownCallback) ShutdownWii);
+	SYS_SetPowerCallback(ShutdownWii);
+    WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS);
+#else
+	int storage = mountStorage();
+	if(!storage) {
+		drawErrorAndExit(tex_BMfont3, tex_BMfont5, "No usable storage medium found.");
+	}
+	print_gecko("Device name: %s\r\n", deviceName);
+#endif
 	
 	// Parse the wakemii album dir for valid directories.
 	DIR* dp = opendir( "/wakemii/albums" );
 	if(!dp) {
 		print_gecko("wakemii/albums dir not found!\r\n");
+		drawErrorAndExit(tex_BMfont3, tex_BMfont5, "/wakemii/albums not found, please read the setup guide.");
 		return -1;
 	}
 	struct dirent *entry;
@@ -671,6 +752,7 @@ int main() {
 		time(&curtime);
 		struct tm *tmpTime = gmtime(&curtime);
 		GRRLIB_Printf(50, 25, tex_BMfont3, GRRLIB_WHITE, 1, "WAKEMII");
+		GRRLIB_Printf(280, 44, tex_BMfont5, GRRLIB_WHITE, 1, "v1.1");
         GRRLIB_Printf(350, 27, tex_BMfont5, GRRLIB_WHITE, 1, "Current FPS: %d | Mem Free %.2fMB", FPS, (SYS_GetArena1Hi()-SYS_GetArena1Lo())/(1048576.0f));
 		if(!continuousPlayOn) {
 			if(tmpTime->tm_sec % 2) {

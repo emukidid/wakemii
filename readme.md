@@ -18,7 +18,7 @@ The alarm track is always chosen at random, as is the hourly track.
     * /wakemii/albums/\<some album name>/cover.jpg
     * /wakemii/hourly/*.mp3
 * JPG, PNG and BMP are supported for cover art.
-
+* Wii will use the front SD card slot only, GameCube will use GCLoader, SD2SP2, Slot A then Slot B (MMCE devices are also supported).
 ### Controls:
 For a Wii, only a Wii remote is supported. For GameCube, only a GC controller.
 |Function|Wii|GameCube|
@@ -41,7 +41,6 @@ simply not display images if they're too big, I recommend 320x240
 although I've had sizes up to 800x600 work but it can be hit or miss.**
 * I have only tried 128kbps MP3 files, larger bitrate files might have issues
 * The alarm will only sound for a minute (or less if the track chosen is less), it cannot be cancelled/snoozed.
-* The GameCube version is completely broken, I assume GRRLIB is to blame.
 * There are probably bugs!
 
 ## Possible future features
@@ -52,7 +51,7 @@ although I've had sizes up to 800x600 work but it can be hit or miss.**
 * VGMStream integration for loads more files
 
 ## Building
-Have a working devKitPro & libOGC2 setup, then hack at GRRLIB to get it building and placed in the correct portlibs location (until a proper updated/packaged version exists). After that, just type make and it should compile.
+Have a working devKitPro & libogc2 setup, along with grrlib installed via pacman. After that, just type make and it should compile.
 
 ## CREDITS
  * [libOGC2](https://github.com/extremscorner/libogc2): [Extrems]
